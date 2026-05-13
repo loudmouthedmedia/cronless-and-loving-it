@@ -1,25 +1,25 @@
 ---
 name: cronless-and-loving-it
 description: >
-  Replace cron with launchd on macOS — because cron silently drops jobs when your Mac sleeps.
-  Audit, migrate, and manage launchd LaunchAgents so your schedules survive sleep, boot, and crash.
-  Use on any Mac where cron jobs get silently dropped. Triggers on "launchd", "mac scheduler",
+  Replace cron with launchd on macOS and add dead man's switch monitoring.
+  Layer 1: launchd replaces cron so jobs survive sleep. Layer 2: Healthchecks.io dead man's
+  switch detects silent failures. Audit, migrate, and manage launchd LaunchAgents + ping-based
+  monitoring for scheduled jobs across the fleet. Triggers on "launchd", "mac scheduler",
   "mac cron replacement", "plist", "LaunchAgent", "mac sleep cron", "schedule mac",
-  "mac watchdog", "migrate cron", "cron to launchd", "replace cron", "cronless".
+  "mac watchdog", "migrate cron", "cron to launchd", "replace cron", "cronless",
+  "dead man's switch", "healthcheck", "job monitoring", "cron monitoring".
 ---
 
-# Cronless and Loving It
+# Cronless and Loving It 💚
+
+Two layers of bulletproof scheduling:
+
+**Layer 1 — launchd replaces cron** so jobs survive sleep.
+**Layer 2 — Dead man's switch** detects when they don't run.
+
+## Layer 1: launchd (Mac Scheduling)
 
 macOS sleeps. Cron doesn't wake up. launchd does.
-
-## When to Use This Skill
-
-- Scheduling any recurring task on a Mac OpenClaw instance
-- Replacing existing cron jobs on Mac minis with launchd equivalents
-- Auditing a Mac's scheduling setup (cron vs launchd)
-- Setting up watchdogs, health checks, or reports on Mac fleet machines
-
-## Why launchd Instead of cron
 
 | Problem | cron | launchd |
 |---------|------|---------|
@@ -28,20 +28,14 @@ macOS sleeps. Cron doesn't wake up. launchd does.
 | No crash recovery | No | `KeepAlive` auto-restarts |
 | No boot-time execution | No | `RunAtLoad` |
 
-## Workflow: Audit First
-
-Before migrating, always audit the target machine:
+### Audit First
 
 ```bash
 # Run on the Mac mini
 bash scripts/cron2launchd.sh --audit
 ```
 
-This shows all cron jobs, existing launchd plists, and whether they're loaded.
-
-## Workflow: Migrate Cron → launchd
-
-### Automatic Migration (Recommended)
+### Migrate Cron → launchd
 
 ```bash
 # Dry run first — see what would be created
@@ -54,17 +48,7 @@ bash scripts/cron2launchd.sh --migrate
 bash scripts/cron2launchd.sh --migrate --label-filter "self_heal"
 ```
 
-The script will:
-1. Parse each cron job
-2. Generate a launchd plist with correct PATH, HOME, and schedule
-3. Validate the plist with `plutil -lint`
-4. Load it with `launchctl load`
-5. Verify it's running
-6. Remove the crontab entry
-
-### Manual plist Generation
-
-For custom jobs or finer control:
+### Generate Individual Plists
 
 ```bash
 # Interval-based (watchdogs, health checks)
@@ -81,27 +65,106 @@ python3 scripts/generate_plist.py \
   --hour 5 --minute 0 \
   --command "openclaw run --task morning-report" \
   --machine cosmos \
-  --no-run-at-load \
-  --output com.openclaw.morning-report.plist
+  --no-run-at-load
 ```
 
-### Install on a Remote Mac
+### Install / Remove
 
 ```bash
-# Copy plist to Mac
 scp com.openclaw.watchdog.plist jj:~/Library/LaunchAgents/
-
-# SSH in and load it
 ssh jj "launchctl load ~/Library/LaunchAgents/com.openclaw.watchdog.plist"
-
-# Verify
-ssh jj "launchctl list | grep openclaw"
+# Remove: ssh jj "launchctl unload ... && rm ..."
 ```
 
-### Unload / Remove
+## Layer 2: Dead Man's Switch (Healthchecks.io)
+
+**Problem:** Even with launchd, jobs can silently fail. The machine could be down entirely. You need to know *before* the client does.
+
+**Solution:** Every job pings Healthchecks on completion. If no ping arrives within the expected window, Healthchecks alerts you via Telegram.
+
+### Setup (Already Deployed on MCP)
+
+Healthchecks.io is self-hosted on MCP at `http://localhost:8000/`
+
+| Credential | Value |
+|-----------|-------|
+| URL | http://localhost:8000/ |
+| Admin | admin@cosmosthebot.com / mcp-fleet-2026 |
+| API Key (R/W) | `llit57t0vOXF78g3OgpNysNFX1kAOYAL` |
+| API Key (RO) | `Cdu2rBT8QfvUKJRj0r7q1X6ctPMaeDtS` |
+| Ping Key | `hQ4K0qJyjGpO5rWyLoIxgg` |
+
+### Create a Check
 
 ```bash
-ssh jj "launchctl unload ~/Library/LaunchAgents/com.openclaw.watchdog.plist && rm ~/Library/LaunchAgents/com.openclaw.watchdog.plist"
+# Create a new check for a scheduled job
+curl -X POST http://localhost:8000/api/v3/checks/ \
+  -H "X-Api-Key: llit57t0vOXF78g3OgpNysNFX1kAOYAL" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Job Name",
+    "tags": "mcp watchdog",
+    "timeout": 3600,
+    "grace": 1800
+  }'
+```
+
+Response includes the `ping_url` — use the UUID from it.
+
+### Ping on Completion
+
+Add this to the END of every scheduled job (launchd plist or OpenClaw cron):
+
+```bash
+# Using UUID (from create response)
+curl -fsS --retry 3 http://localhost:8000/ping/<uuid>
+
+# Using ping key + slug (easier to read)
+curl -fsS --retry 3 http://localhost:8000/ping/hQ4K0qJyjGpO5rWyLoIxgg/<slug>
+```
+
+### Report Failure
+
+```bash
+# Signal failure (job ran but failed)
+curl -fsS --retry 3 http://localhost:8000/ping/<uuid>/fail
+```
+
+### Integrate with OpenClaw Cron Jobs
+
+Add a ping to the end of any cron job payload message:
+
+```
+... After completing your task, run: curl -fsS --retry 3 http://localhost:8000/ping/<uuid>
+```
+
+Or add to launchd plist scripts:
+
+```bash
+#!/bin/bash
+# ... do the actual work ...
+RESULT=$?
+if [ $RESULT -eq 0 ]; then
+  curl -fsS --retry 3 http://localhost:8000/ping/<uuid>
+else
+  curl -fsS --retry 3 http://localhost:8000/ping/<uuid>/fail
+fi
+```
+
+### List All Checks
+
+```bash
+curl -s http://localhost:8000/api/v3/checks/ \
+  -H "X-Api-Key: Cdu2rBT8QfvUKJRj0r7q1X6ctPMaeDtS" | python3 -m json.tool
+```
+
+### Docker Management
+
+```bash
+cd ~/healthchecks
+docker compose up -d      # Start
+docker compose down        # Stop
+docker compose logs -f     # Logs
 ```
 
 ## Schedule Type Selection
@@ -112,12 +175,11 @@ ssh jj "launchctl unload ~/Library/LaunchAgents/com.openclaw.watchdog.plist && r
 
 ## PATH Requirement (Critical)
 
-All Mac minis in this fleet use **Node 22** pinned via Homebrew. The plist MUST set the PATH explicitly or use absolute paths:
+All Mac minis use **Node 22** pinned via Homebrew. Always set PATH explicitly in plists:
 
-- `openclaw` → `/opt/homebrew/opt/node@22/bin/node /opt/homebrew/bin/openclaw`
-- Or set `EnvironmentVariables` → `PATH` in the plist
-
-**Never** rely on the default `node` — Node 25 has a broken `libsimdjson.29.dylib` on this fleet.
+```
+/opt/homebrew/opt/node@22/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
+```
 
 ## Fleet SSH Aliases
 
@@ -127,18 +189,14 @@ All Mac minis in this fleet use **Node 22** pinned via Homebrew. The plist MUST 
 | J&J | `jj` | test | /Users/test | `ssh test@100.118.161.126` |
 | Zaphod | `zaphod` | joshwoods | /Users/joshwoods | `ssh joshwoods@100.103.14.107` |
 
-Always prepend PATH in SSH commands:
-```bash
-ssh jj "export PATH=/opt/homebrew/opt/node@22/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH && <command>"
-```
-
 ## Troubleshooting
 
 - **Job not running?** `launchctl list | grep <label>` — exit code 0 = last run succeeded
 - **Job running but failing?** Check logs: `log show --predicate 'process == "openclaw"' --last 1h`
 - **plist not loading?** Validate: `plutil -lint ~/Library/LaunchAgents/com.openclaw.*.plist`
 - **Need to reload?** `launchctl unload ... && launchctl load ...` (must unload first)
-- **Cron jobs still present?** Run `crontab -l` to verify, `crontab -r` to clear
+- **Cron jobs still present?** `crontab -l` to verify, `crontab -r` to clear
+- **Healthchecks down?** `cd ~/healthchecks && docker compose up -d`
 
 ## Scripts
 
