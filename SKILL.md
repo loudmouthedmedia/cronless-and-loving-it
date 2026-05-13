@@ -4,20 +4,20 @@ description: >
   Replace cron with launchd on macOS and add dead man's switch monitoring.
   Layer 1: launchd replaces cron so jobs survive sleep. Layer 2: Healthchecks.io dead man's
   switch detects silent failures. Audit, migrate, and manage launchd LaunchAgents + ping-based
-  monitoring for scheduled jobs across the fleet. Layers 3-5 evaluated and documented.
-  Triggers on "launchd", "mac scheduler", "mac cron replacement", "plist", "LaunchAgent",
-  "mac sleep cron", "schedule mac", "mac watchdog", "migrate cron", "cron to launchd",
-  "replace cron", "cronless", "dead man's switch", "healthcheck", "job monitoring",
-  "cron monitoring".
+  monitoring for scheduled jobs across the fleet. Triggers on "launchd", "mac scheduler",
+  "mac cron replacement", "plist", "LaunchAgent", "mac sleep cron", "schedule mac",
+  "mac watchdog", "migrate cron", "cron to launchd", "replace cron", "cronless",
+  "dead man's switch", "healthcheck", "job monitoring", "cron monitoring".
 ---
 
 # Cronless and Loving It 💚
 
-Five layers of bulletproof scheduling. Two deployed, three evaluated and documented.
+Two layers of bulletproof scheduling:
 
-## Architecture: The Full Stack
+**Layer 1 — launchd replaces cron** so jobs survive sleep.
+**Layer 2 — Dead man's switch** detects silent failures.
 
-### Layer 1: launchd (Sleep-Safe Scheduling) ✅ DEPLOYED
+## Layer 1: launchd (Sleep-Safe Scheduling)
 
 macOS sleeps. Cron silently drops jobs. launchd catches up on wake.
 
@@ -28,62 +28,11 @@ macOS sleeps. Cron silently drops jobs. launchd catches up on wake.
 | No boot-time execution | No | `RunAtLoad` |
 | PATH issues | Common | Set explicitly |
 
-**Deployed:** Cosmos self_heal.sh migrated from crontab to launchd. Cosmos is cron-free.
-
-### Layer 2: Dead Man's Switch (Healthchecks.io) ✅ DEPLOYED
+## Layer 2: Dead Man's Switch (Healthchecks.io)
 
 Every job pings Healthchecks on completion. If no ping arrives within the expected window, you get a Telegram alert. Detects silent failures and offline machines.
 
-**Deployed:** Self-hosted Healthchecks.io on MCP (Docker, localhost:8000). 6 checks registered.
-
-### Layer 3: Job Idempotency ⏸️ DEFERRED
-
-**Problem:** Double-triggering (RunAtLoad + StartCalendarInterval close together).
-
-**Proposed:** File-based idempotency keys:
-```bash
-IDEM_FILE="$HOME/.openclaw/state/daily-$(date +%Y-%m-%d)-${JOB_NAME}.lock"
-if [ -f "$IDEM_FILE" ]; then
-    echo "Job $JOB_NAME already ran today, skipping"
-    exit 0
-fi
-touch "$IDEM_FILE"
-# ... do the work ...
-```
-
-**Why deferred:** Double-triggering is rare with launchd. OpenClaw cron has built-in dedup. Current jobs are naturally idempotent. Revisit when we see actual double-trigger issues.
-
-### Layer 4: Job Queue With Retry — Considered, Not Needed
-
-**Proposed:** Cron enqueues to Redis/SQLite, worker processes with retry and exponential backoff.
-
-**Why we don't need it:** OpenClaw already provides this.
-
-| Proposed | What OpenClaw Already Has |
-|----------|--------------------------|
-| Cron enqueues job | OpenClaw cron enqueues to internal queue |
-| Worker with retry/backoff | Isolated agent runs with timeoutSeconds |
-| Failed after N retries → alert | `failureAlert` config (3 consecutive errors → Telegram) |
-| Job state survives reboot | OpenClaw persists job state |
-
-Adding Huey/Redis would mean two job queues in parallel — more complexity, no gain.
-
-### Layer 5: Orchestration Brain — Already Built
-
-**Proposed:** DGX as central monitoring, log aggregation, AI analysis, alert routing.
-
-**We already have this:**
-
-| Proposed | What We Already Have |
-|----------|----------------------|
-| Healthchecks dashboard | ✅ Layer 2 (just deployed) |
-| Log aggregator (Loki/OpenSearch) | ✅ Nightly log collection to `/mnt/shit/CosmosShare/` |
-| AI log analysis | ✅ Nightly Analysis cron (Kimi reads logs, flags issues) |
-| Alert rules → phone | ✅ Telegram via Healthchecks + OpenClaw delivery |
-| SSH jump host | ✅ MCP via Tailscale fleet, SSH aliases |
-| Morning Report | ✅ Daily email + Telegram with fleet health summary |
-
-MCP *is* the orchestration brain. Adding Loki/OpenSearch would duplicate what OpenClaw cron + Kimi already does.
+For the full five-layer architecture, see `references/five-layers.md`.
 
 ---
 
@@ -143,25 +92,13 @@ ssh jj "launchctl load ~/Library/LaunchAgents/com.openclaw.watchdog.plist"
 # Remove: ssh jj "launchctl unload ... && rm ..."
 ```
 
----
-
-## Layer 2: Healthchecks.io Reference
-
-### Setup (Already Deployed on MCP)
-
-| Credential | Value |
-|-----------|-------|
-| URL | http://localhost:8000/ |
-| Admin | admin@cosmosthebot.com / mcp-fleet-2026 |
-| API Key (R/W) | `llit57t0vOXF78g3OgpNysNFX1kAOYAL` |
-| API Key (RO) | `Cdu2rBT8QfvUKJRj0r7q1X6ctPMaeDtS` |
-| Ping Key | `hQ4K0qJyjGpO5rWyLoIxgg` |
+## Healthchecks.io Reference
 
 ### Create a Check
 
 ```bash
 curl -X POST http://localhost:8000/api/v3/checks/ \
-  -H "X-Api-Key: llit57t0vOXF78g3OgpNysNFX1kAOYAL" \
+  -H "X-Api-Key: <API_KEY>" \
   -H "Content-Type: application/json" \
   -d '{"name": "Job Name", "tags": "mcp watchdog", "timeout": 3600, "grace": 1800}'
 ```
@@ -180,16 +117,7 @@ curl -fsS --retry 3 http://localhost:8000/ping/<uuid>/fail
 
 ```bash
 curl -s http://localhost:8000/api/v3/checks/ \
-  -H "X-Api-Key: Cdu2rBT8QfvUKJRj0r7q1X6ctPMaeDtS" | python3 -m json.tool
-```
-
-### Docker Management
-
-```bash
-cd ~/healthchecks
-docker compose up -d      # Start
-docker compose down        # Stop
-docker compose logs -f     # Logs
+  -H "X-Api-Key: <RO_API_KEY>" | python3 -m json.tool
 ```
 
 ---

@@ -4,47 +4,13 @@
 
 ## The Problem
 
-macOS sleeps. When it does, `cron` silently skips scheduled jobs. No error, no retry, no catch-up. Your watchdogs, reports, and health checks just... don't run.
+macOS sleeps. When it does, `cron` silently skips scheduled jobs. No error, no retry, no catch-up.
 
 `launchd` is macOS's native service manager. It handles sleep/wake correctly:
 - **`StartInterval`** — runs every N seconds, catches up on wake
 - **`StartCalendarInterval`** — runs at specific times, catches up on wake
 - **`RunAtLoad`** — runs on boot/login
 - **`KeepAlive`** — auto-restarts on crash
-
-## Five Layers
-
-| Layer | Name | Status | Description |
-|-------|------|--------|-------------|
-| 1 | **launchd** | ✅ Deployed | Replace cron with sleep-safe scheduling |
-| 2 | **Dead Man's Switch** | ✅ Deployed | Healthchecks.io detects silent failures |
-| 3 | **Job Idempotency** | ⏸️ Deferred | File-based idempotency keys to prevent double-triggers |
-| 4 | **Job Queue with Retry** | ❌ Not needed | OpenClaw already provides job queue + retry + alerting |
-| 5 | **Orchestration Brain** | ❌ Already built | MCP already aggregates logs, analyzes with AI, and alerts |
-
-### Layer 3: Job Idempotency (Deferred)
-
-Double-triggering is rare with launchd. If needed, use file-based idempotency keys:
-
-```bash
-IDEM_FILE="$HOME/.openclaw/state/daily-$(date +%Y-%m-%d)-${JOB_NAME}.lock"
-if [ -f "$IDEM_FILE" ]; then
-    echo "Job $JOB_NAME already ran today, skipping"
-    exit 0
-fi
-touch "$IDEM_FILE"
-# ... do the work ...
-```
-
-**Revisit when:** We see actual double-trigger issues in Healthchecks data.
-
-### Layer 4: Job Queue with Retry (Not Needed)
-
-OpenClaw already provides: job queue, isolated agent execution, timeout/retry, failure alerting (`failureAlert`). Adding Redis/Huey underneath would mean two job queues in parallel — more complexity, no gain.
-
-### Layer 5: Orchestration Brain (Already Built)
-
-MCP already does: Healthchecks dashboard, nightly log collection, Kimi-powered anomaly analysis, Telegram alerts, SSH jump host, morning report email. Adding Loki/OpenSearch would duplicate existing functionality.
 
 ## Quick Start
 
@@ -101,18 +67,29 @@ scp watchdog.plist user@mac:~/Library/LaunchAgents/
 ssh user@mac "launchctl load ~/Library/LaunchAgents/watchdog.plist"
 ```
 
+## The Five Layers
+
+For the full architecture, see [`references/five-layers.md`](references/five-layers.md).
+
+1. **Replace Cron with launchd** — sleep-safe scheduling
+2. **Dead Man's Switch** — Healthchecks.io detects silent failures
+3. **Job Idempotency** — file-based dedup to prevent double-triggers
+4. **Job Queue with Retry** — exponential backoff for failed jobs
+5. **Orchestration Brain** — central monitoring, log aggregation, AI analysis, alert routing
+
 ## Scripts
 
 | Script | Description |
 |--------|-------------|
-| `scripts/cron2launchd.sh` | Audit and migrate cron → launchd. Supports `--ping-url` for Layer 2 |
-| `scripts/generate_plist.py` | Generate individual launchd plists. Supports `--ping-url` for Layer 2 |
+| `scripts/cron2launchd.sh` | Audit and migrate cron → launchd. Supports `--ping-url` |
+| `scripts/generate_plist.py` | Generate individual launchd plists. Supports `--ping-url` |
 
 ## References
 
 | File | Description |
 |------|-------------|
 | `references/plist-templates.md` | Ready-to-copy plist templates |
+| `references/five-layers.md` | The five-layer architecture outline |
 
 ## Fleet Notes
 
