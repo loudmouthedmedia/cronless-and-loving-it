@@ -233,3 +233,4 @@ All Mac minis use **Node 22** pinned via Homebrew. Always set PATH explicitly in
 ## References
 
 - **`references/plist-templates.md`** — Ready-to-copy plist templates
+- **`references/five-layers.md`** — The five-layer architecture outline
