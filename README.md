@@ -12,6 +12,40 @@ macOS sleeps. When it does, `cron` silently skips scheduled jobs. No error, no r
 - **`RunAtLoad`** — runs on boot/login
 - **`KeepAlive`** — auto-restarts on crash
 
+## Five Layers
+
+| Layer | Name | Status | Description |
+|-------|------|--------|-------------|
+| 1 | **launchd** | ✅ Deployed | Replace cron with sleep-safe scheduling |
+| 2 | **Dead Man's Switch** | ✅ Deployed | Healthchecks.io detects silent failures |
+| 3 | **Job Idempotency** | ⏸️ Deferred | File-based idempotency keys to prevent double-triggers |
+| 4 | **Job Queue with Retry** | ❌ Not needed | OpenClaw already provides job queue + retry + alerting |
+| 5 | **Orchestration Brain** | ❌ Already built | MCP already aggregates logs, analyzes with AI, and alerts |
+
+### Layer 3: Job Idempotency (Deferred)
+
+Double-triggering is rare with launchd. If needed, use file-based idempotency keys:
+
+```bash
+IDEM_FILE="$HOME/.openclaw/state/daily-$(date +%Y-%m-%d)-${JOB_NAME}.lock"
+if [ -f "$IDEM_FILE" ]; then
+    echo "Job $JOB_NAME already ran today, skipping"
+    exit 0
+fi
+touch "$IDEM_FILE"
+# ... do the work ...
+```
+
+**Revisit when:** We see actual double-trigger issues in Healthchecks data.
+
+### Layer 4: Job Queue with Retry (Not Needed)
+
+OpenClaw already provides: job queue, isolated agent execution, timeout/retry, failure alerting (`failureAlert`). Adding Redis/Huey underneath would mean two job queues in parallel — more complexity, no gain.
+
+### Layer 5: Orchestration Brain (Already Built)
+
+MCP already does: Healthchecks dashboard, nightly log collection, Kimi-powered anomaly analysis, Telegram alerts, SSH jump host, morning report email. Adding Loki/OpenSearch would duplicate existing functionality.
+
 ## Quick Start
 
 ### Audit a Mac
@@ -20,7 +54,7 @@ macOS sleeps. When it does, `cron` silently skips scheduled jobs. No error, no r
 bash scripts/cron2launchd.sh --audit
 ```
 
-### Migrate all cron jobs to launchd
+### Migrate cron to launchd
 
 ```bash
 # Dry run first
@@ -28,6 +62,9 @@ bash scripts/cron2launchd.sh --migrate --dry-run
 
 # Migrate for real
 bash scripts/cron2launchd.sh --migrate
+
+# With dead man's switch (Layer 2)
+bash scripts/cron2launchd.sh --migrate --ping-url http://localhost:8000/ping/<uuid>
 ```
 
 ### Generate an individual plist
@@ -38,6 +75,14 @@ python3 scripts/generate_plist.py \
   --label com.openclaw.watchdog \
   --interval 300 \
   --command "openclaw doctor" \
+  --output watchdog.plist
+
+# With dead man's switch
+python3 scripts/generate_plist.py \
+  --label com.openclaw.watchdog \
+  --interval 300 \
+  --command "openclaw doctor" \
+  --ping-url http://localhost:8000/ping/<uuid> \
   --output watchdog.plist
 
 # Daily at 5am (report)
@@ -60,8 +105,8 @@ ssh user@mac "launchctl load ~/Library/LaunchAgents/watchdog.plist"
 
 | Script | Description |
 |--------|-------------|
-| `scripts/cron2launchd.sh` | Audit and migrate cron → launchd |
-| `scripts/generate_plist.py` | Generate individual launchd plists |
+| `scripts/cron2launchd.sh` | Audit and migrate cron → launchd. Supports `--ping-url` for Layer 2 |
+| `scripts/generate_plist.py` | Generate individual launchd plists. Supports `--ping-url` for Layer 2 |
 
 ## References
 
