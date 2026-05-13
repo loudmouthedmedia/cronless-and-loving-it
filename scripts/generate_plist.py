@@ -51,6 +51,9 @@ def build_plist(label, command=None, script=None, interval=None, hour=None, minu
     # Build ProgramArguments
     if script:
         program_args = ["/bin/bash", script]
+    elif '&&' in command or '||' in command or '|' in command or '>' in command:
+        # Shell operators present — wrap in bash -c
+        program_args = ["/bin/bash", "-c", command]
     else:
         # Use absolute paths for node and openclaw
         # Split command into args, replacing 'openclaw' with absolute path
@@ -137,12 +140,18 @@ def main():
     parser.add_argument("--machine", help="Machine alias (cosmos, jj, zaphod) for HOME dir")
     parser.add_argument("--no-run-at-load", action="store_true", help="Don't run at load (default: runs)")
     parser.add_argument("--output", "-o", help="Output file path (default: stdout)")
+    parser.add_argument("--ping-url", help="Healthchecks.io ping URL (Layer 2 dead man's switch). Wraps command with curl ping on success/fail.")
 
     args = parser.parse_args()
 
+    # Layer 2: Wrap command with Healthchecks ping
+    command = args.command
+    if args.ping_url and args.command:
+        command = f"{args.command} && curl -fsS --retry 3 '{args.ping_url}' || curl -fsS --retry 3 '{args.ping_url}/fail'"
+
     plist = build_plist(
         label=args.label,
-        command=args.command,
+        command=command,
         script=args.script,
         interval=args.interval,
         hour=args.hour,

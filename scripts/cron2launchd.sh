@@ -8,6 +8,11 @@
 #   ./cron2launchd.sh --migrate --dry-run   # Preview what would be created, don't install
 #   ./cron2launchd.sh --migrate --label-filter "self_heal"  # Only migrate matching jobs
 #
+# Layer 2 — Dead Man's Switch:
+#   Add --ping-url <url> to append a Healthchecks ping to each migrated job.
+#   Example: ./cron2launchd.sh --migrate --ping-url http://localhost:8000/ping/UUID
+#   This wraps the original command so it pings Healthchecks on success.
+#
 # Designed for OpenClaw fleet Mac minis. Sets correct PATH with Node 22.
 # ==============================================================================
 
@@ -18,6 +23,7 @@ LAUNCHD_DIR="$HOME/Library/LaunchAgents"
 CRON_LABEL_PREFIX="com.openclaw.cron-migrated"
 PATH_OPENCLAW="/opt/homebrew/opt/node@22/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
 DRY_RUN=false
+PING_URL=""
 LABEL_FILTER=""
 ACTION=""
 
@@ -28,6 +34,7 @@ while [[ $# -gt 0 ]]; do
     --migrate) ACTION="migrate"; shift ;;
     --dry-run) DRY_RUN=true; shift ;;
     --label-filter) LABEL_FILTER="$2"; shift 2 ;;
+    --ping-url) PING_URL="$2"; shift 2 ;;
     --help|-h)
       echo "Usage: $0 --audit | --migrate [--dry-run] [--label-filter pattern]"
       echo ""
@@ -35,6 +42,7 @@ while [[ $# -gt 0 ]]; do
       echo "  --migrate         Convert cron jobs to launchd plists"
       echo "  --dry-run         Preview without making changes"
       echo "  --label-filter    Only migrate cron entries matching pattern"
+      echo "  --ping-url URL    Append Healthchecks ping URL to each job (Layer 2)"
       exit 0 ;;
     *) echo "Unknown option: $1"; exit 1 ;;
   esac
@@ -74,6 +82,11 @@ generate_plist() {
   local home="$4"
   local stdout_log="$5"
   local stderr_log="$6"
+
+  # Layer 2: Wrap command with Healthchecks ping if --ping-url was provided
+  if [[ -n "$PING_URL" ]]; then
+    command="${command} && curl -fsS --retry 3 '${PING_URL}' || curl -fsS --retry 3 '${PING_URL}/fail'"
+  fi
 
   cat <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
