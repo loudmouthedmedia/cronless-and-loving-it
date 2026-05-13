@@ -1,15 +1,14 @@
 ---
-name: mac-launchd
+name: cronless-and-loving-it
 description: >
-  Create, install, and manage macOS launchd plist LaunchAgents for OpenClaw fleet Mac minis.
-  Use when scheduling recurring tasks (watchdogs, reports, health checks) on macOS machines
-  where cron silently drops jobs during sleep. Replaces cron with launchd for Mac OpenClaw
-  instances. Triggers on "launchd", "mac scheduler", "mac cron replacement", "plist",
-  "LaunchAgent", "mac sleep cron", "schedule mac", "mac fleet schedule", "mac watchdog",
-  "migrate cron", "cron to launchd", "replace cron".
+  Replace cron with launchd on macOS — because cron silently drops jobs when your Mac sleeps.
+  Audit, migrate, and manage launchd LaunchAgents so your schedules survive sleep, boot, and crash.
+  Use on any Mac where cron jobs get silently dropped. Triggers on "launchd", "mac scheduler",
+  "mac cron replacement", "plist", "LaunchAgent", "mac sleep cron", "schedule mac",
+  "mac watchdog", "migrate cron", "cron to launchd", "replace cron", "cronless".
 ---
 
-# mac-launchd
+# Cronless and Loving It
 
 macOS sleeps. Cron doesn't wake up. launchd does.
 

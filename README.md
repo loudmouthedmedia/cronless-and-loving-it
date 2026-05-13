@@ -1,6 +1,6 @@
-# mac-launchd
+# Cronless and Loving It
 
-> Replace cron with launchd on macOS — because cron silently drops jobs when your Mac sleeps.
+> Replace cron with launchd on macOS — because cron silently drops jobs when your Mac sleeps. 💚
 
 ## The Problem
 
